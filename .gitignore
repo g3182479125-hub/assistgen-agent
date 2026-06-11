@@ -1,0 +1,96 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+ENV/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs and runtime files
+*.log
+logs/
+log/
+uvicorn-*.out.log
+uvicorn-*.err.log
+
+# Local uploads and generated artifacts
+uploads/
+llm_backend/uploads/
+llm_backend/logs/
+llm_backend/app/lg_agent/logs/
+llm_backend/app/test/logs/
+llm_backend/scripts/logs/
+
+# GraphRAG generated data/cache/output
+llm_backend/app/graphrag/data/cache/
+llm_backend/app/graphrag/data/logs/
+llm_backend/app/graphrag/data/output/
+llm_backend/app/graphrag/data/pdf_outputs/
+llm_backend/app/graphrag/origin_data/logs/
+llm_backend/app/graphrag/test_data/.env
+
+# Local databases / model files
+*.db
+*.sqlite
+*.sqlite3
+*.parquet.tmp
+*.faiss
+*.pkl
+*.joblib
+
+# Node / frontend build caches
+node_modules/
+.npm/
+.cache/
+
+# Local secrets
+secrets/
+*.pem
+*.key
+# Keep bundled frontend build used by FastAPI static mount
+!llm_backend/static/dist/
+!llm_backend/static/dist/**
+# Large GraphRAG sample/binary data kept locally only
+llm_backend/app/graphrag/data/**/*.pdf
+llm_backend/app/graphrag/test_data/**/*.pdf
+llm_backend/app/graphrag/docs/examples_notebooks/inputs/**/lancedb/
+llm_backend/app/graphrag/examples_notebooks/inputs/**/lancedb/
+llm_backend/app/graphrag/docs/examples_notebooks/inputs/**/*.parquet
+llm_backend/app/graphrag/examples_notebooks/inputs/**/*.parquet
+llm_backend/app/graphrag/docs/data/**/*.zip
