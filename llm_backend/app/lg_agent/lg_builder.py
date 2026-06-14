@@ -10,10 +10,9 @@ from app.lg_agent.lg_prompts import (
     GENERATE_QUERIES_SYSTEM_PROMPT
 )
 from langchain_core.runnables import RunnableConfig
-from langchain_deepseek import ChatDeepSeek
-from langchain_ollama import ChatOllama
-from app.core.config import settings, ServiceType
+from app.core.config import settings
 from app.core.logger import get_logger
+from app.harness import get_agent_harness
 from typing import cast, Literal, TypedDict, List, Dict, Any
 from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.memory import MemorySaver
@@ -53,6 +52,7 @@ class AdditionalGuardrailsOutput(BaseModel):
 
 # 构建日志记录器
 logger = get_logger(service="lg_builder")
+harness = get_agent_harness()
 
 async def analyze_and_route_query(
     state: AgentState, *, config: RunnableConfig
@@ -70,12 +70,8 @@ async def analyze_and_route_query(
         dict[str, Router]: A dictionary containing the 'router' key with the classification result (classification type and logic).
     """
     # 选择模型实例，通过.env文件中的AGENT_SERVICE参数选择
-    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["router"])
-        logger.info(f"Using DeepSeek model: {settings.DEEPSEEK_MODEL}")
-    else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["router"])
-        logger.info(f"Using Ollama model: {settings.OLLAMA_AGENT_MODEL}")
+    model = harness.models.get_agent_model(tags=["router"])
+    harness.trace.record("model_selected", node="analyze_and_route_query", role="agent", tags=["router"])
 
     # 拼接提示模版 + 用户的实时问题（包含历史上下文对话） 
     messages = [
@@ -89,38 +85,26 @@ async def analyze_and_route_query(
         Router, await model.with_structured_output(Router).ainvoke(messages)
     )
     logger.info(f"Analyze user query type completed, result: {response}")
+    harness.trace.record("router_result", router_type=response["type"], logic=response["logic"])
     return {"router": response}
 
 def route_query(
     state: AgentState,
 ) -> Literal["respond_to_general_query", "get_additional_info", "create_research_plan", "create_image_query", "create_file_query"]:
-    """根据查询分类确定下一步操作。
-
-    Args:
-        state (AgentState): 当前代理状态，包括路由器的分类。
-
-    Returns:
-        Literal["respond_to_general_query", "get_additional_info", "create_research_plan", "create_image_query", "create_file_query"]: 下一步操作。
-    """
-    _type = state.router["type"]
-    
-    # 检查配置中是否有图片路径，如果有，优先处理为图片查询
-    if hasattr(state, "config") and state.config and state.config.get("configurable", {}).get("image_path"):
-        logger.info("检测到图片路径，转为图片查询处理")
-        return "create_image_query"
-
-    if _type == "general-query":
-        return "respond_to_general_query"
-    elif _type == "additional-query":
-        return "get_additional_info"
-    elif _type == "graphrag-query":
-        return "create_research_plan"
-    elif _type == "image-query":
-        return "create_image_query"
-    elif _type == "file-query":
-        return "create_file_query"
-    else:
-        raise ValueError(f"Unknown router type {_type}")
+    """Route the classified intent to the next graph node."""
+    has_image = (
+        hasattr(state, "config")
+        and state.config
+        and state.config.get("configurable", {}).get("image_path")
+    )
+    route = harness.router.route(state.router["type"], has_image=bool(has_image))
+    harness.trace.record(
+        "route_selected",
+        router_type=state.router["type"],
+        route=route,
+        has_image=bool(has_image),
+    )
+    return route
     
 async def respond_to_general_query(
     state: AgentState, *, config: RunnableConfig
@@ -139,10 +123,8 @@ async def respond_to_general_query(
     logger.info("-----generate general-query response-----")
     
     # 使用大模型生成回复
-    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["general_query"])
-    else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["general_query"])
+    model = harness.models.get_agent_model(tags=["general_query"])
+    harness.trace.record("model_selected", node="respond_to_general_query", role="agent", tags=["general_query"] )
     
     system_prompt = GENERAL_QUERY_SYSTEM_PROMPT.format(
         logic=state.router["logic"]
@@ -169,10 +151,8 @@ async def get_additional_info(
     logger.info("------continue to get additional info------")
     
     # 使用大模型生成回复
-    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["additional_info"])
-    else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["additional_info"])
+    model = harness.models.get_agent_model(tags=["additional_info"])
+    harness.trace.record("model_selected", node="get_additional_info", role="agent", tags=["additional_info"] )
 
     # 如果用户的问题是电商相关，但与自己的业务无关，则需要返回"无关问题"
 
@@ -352,10 +332,8 @@ async def create_image_query(
                     # 从lg_prompts导入电商客服模板
                     
                     # 构建回复请求
-                    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-                        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["image_query"])
-                    else:
-                        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["image_query"])
+                    model = harness.models.get_agent_model(tags=["image_query"])
+                    harness.trace.record("model_selected", node="create_image_query", role="agent", tags=["image_query"])
                     # 使用专门的图片查询提示模板
                     system_prompt = GET_IMAGE_SYSTEM_PROMPT.format(
                         image_description=image_description
@@ -399,10 +377,8 @@ async def create_research_plan(
     logger.info("------execute local knowledge base query------")
 
     # 使用大模型生成查询/多跳、并行查询计划
-    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["research_plan"])
-    else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["research_plan"])
+    model = harness.models.get_agent_model(tags=["research_plan"])
+    harness.trace.record("model_selected", node="create_research_plan", role="agent", tags=["research_plan"] )
     
     # 初始化必要参数
     # 1. Neo4j图数据库连接 - 使用配置中的连接信息
@@ -415,12 +391,14 @@ async def create_research_plan(
     # 2. 创建自定义检索器实例，根据 Graph Schema 创建 Cypher 示例，用来引导大模型生成正确的Cypher 查询语句
     cypher_retriever = NorthwindCypherRetriever()
 
-    # step 3. 定义工具模式列表    
-    from app.lg_agent.kg_sub_graph.kg_tools_list import cypher_query, predefined_cypher, microsoft_graphrag_query
-    tool_schemas: List[type[BaseModel]] = [cypher_query, predefined_cypher, microsoft_graphrag_query]
-
-    # 3. 预定义的Cypher查询 - 为电商场景定义有用的查询
-    from app.lg_agent.kg_sub_graph.agentic_rag_agents.components.predefined_cypher.cypher_dict import predefined_cypher_dict
+    # 3. 通过 harness 注册表选择可暴露给 Agent 的工具。
+    tool_group = harness.tools.get_group("graphrag")
+    tool_schemas = tool_group.schemas
+    harness.trace.record(
+        "tool_group_selected",
+        group=tool_group.name,
+        tools=[spec.name for spec in tool_group.specs if spec.enabled],
+    )
 
     # 定义电商经营范围
     scope_description = """
@@ -440,7 +418,7 @@ async def create_research_plan(
         llm=model,
         graph=neo4j_graph,
         tool_schemas=tool_schemas,
-        predefined_cypher_dict=predefined_cypher_dict,
+        predefined_cypher_dict=tool_group.predefined_cypher_dict,
         cypher_example_retriever=cypher_retriever,
         scope_description=scope_description,
         llm_cypher_validation=True,
@@ -474,10 +452,8 @@ async def check_hallucinations(
     Returns:
         dict[str, Router]: A dictionary containing the 'router' key with the classification result (classification type and logic).
     """
-    if settings.AGENT_SERVICE == ServiceType.DEEPSEEK:
-        model = ChatDeepSeek(api_key=settings.DEEPSEEK_API_KEY, model_name=settings.DEEPSEEK_MODEL, temperature=0.7, tags=["hallucinations"])
-    else:
-        model = ChatOllama(model=settings.OLLAMA_AGENT_MODEL, base_url=settings.OLLAMA_BASE_URL, temperature=0.7, tags=["hallucinations"])
+    model = harness.models.get_agent_model(tags=["hallucinations"])
+    harness.trace.record("model_selected", node="check_hallucinations", role="agent", tags=["hallucinations"] )
     
     system_prompt = CHECK_HALLUCINATIONS.format(
         documents=state.documents,
